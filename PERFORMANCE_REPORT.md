@@ -13,62 +13,83 @@
 | Item | Value |
 |---|---|
 | Wordlist | 1,000,000 words (random + 20 common passwords) |
-| Hash | SHA-256 |
+| Hash | SHA-256 (only algorithm supported) |
 | Target position | line 949,283 (~95% of the list) |
+| Sub-chunk size (parallel) | 2,000 words |
 
 ## 3. Results
 
 | Workers | Sequential time | Parallel time | Speedup |
 |---:|---:|---:|---:|
 | 1 (sequential) | 0.97 s | — | 1.00x |
-| 2 | — | 0.73 s | 1.34x |
-| 4 | — | 0.52 s | 1.86x |
-| 8 | — | 0.40 s | **2.47x** |
+| 2 | — | 0.71 s | 1.37x |
+| 4 | — | 0.48 s | 2.02x |
+| 8 | — | 0.36 s | **2.69x** |
 
-## 4. Discussion
+## 4. Design
 
-### Why parallel is faster
-SHA-256 hashing is **CPU-bound** (Parallel-1 slide 3). With more processes,
-more cores actually compute hashes in parallel. We use `multiprocessing`
-because Python threads share the GIL — only multiprocessing gives true
-parallelism on CPU work.
+### Sequential
+Single process, single core. Reads the wordlist into memory, then iterates
+word-by-word, hashing with SHA-256 and comparing to the target. Stops on
+first match.
 
-### Why we use a shared `Value` flag + Poison Pill
-Without early termination, every worker would finish its full chunk even
-after one of them already found the password. We use:
+### Parallel
+`multiprocessing.Pool` with `imap_unordered`:
 
-- A shared `Value('b', False)` (Communication slide 9) as a "found" flag.
-- Each worker checks the flag every 1,000 hashes and exits if it's set —
-  this is the **Poison Pill** termination idiom (Adv-Patterns slide 5).
-- A `Queue` (Communication slide 10) carries the matched word back to
-  the main process — no shared variables, no locks for the result.
+- **Persistent pool** — `n` worker processes are spawned once and reused
+  for every sub-chunk. Avoids the per-task spawn cost of one-shot
+  `Process(target=...)`.
+- **Static sub-chunking** — the wordlist is split into 2,000-word
+  sub-chunks streamed lazily into the pool. Small enough to keep progress
+  smooth and to enable fast early-exit; large enough that IPC overhead
+  per item stays negligible.
+- **Streaming results** — `imap_unordered` yields each completed
+  sub-chunk's `(count, hit_or_None, last_word)` tuple as soon as it's
+  ready. The main process accumulates the running total and forwards it
+  to the GUI's progress callback.
+- **Early termination** — when a worker reports `hit is not None`, the
+  main process calls `pool.terminate()` to kill the remaining workers
+  mid-flight. No shared `Value` flag, no manual poison-pill check needed.
 
-### Amdahl's Law
+## 5. Discussion
+
+### Why parallel wins
+SHA-256 hashing is **CPU-bound**. Python threads share the GIL, so true
+parallelism on CPU work requires multiple processes. With `n` workers,
+roughly `n` cores compute hashes simultaneously.
+
+### Why the speedup is sub-linear (Amdahl's Law)
+
 $$S(N) = \frac{1}{(1-P) + P/N}$$
 
-Our measured speedup at N=8 is 2.47x, below the ideal 8x. The non-parallel
-fraction includes:
-- Reading the wordlist from disk (sequential, shared by all modes)
-- Process spawn cost on Windows (`spawn` not `fork`, ~150 ms)
-- Putting/getting through the result `Queue`
+Measured 2.69x at N=8 vs. ideal 8x. Non-parallel costs:
 
-Fitting the data, the parallelizable fraction is roughly **P ≈ 0.70**.
+- Reading the wordlist from disk (paid once, not parallelized)
+- Pool spawn cost on Windows (`spawn`, not `fork` — ~150 ms per worker
+  on first task)
+- `imap_unordered` IPC: pickling each sub-chunk and unpickling the
+  result over the pool's pipe
 
-### When does adding workers stop helping?
-Going 4 → 8 added 24% speedup; going beyond 8 on a 16-logical-core machine
-will plateau quickly because the 8 *physical* cores are already saturated
-and hyperthreading gives little extra throughput on tight integer/hash loops.
+Fitting the data, the parallelizable fraction is roughly **P ≈ 0.74**.
 
-## 5. Screenshots
+### Why not more processes?
+On a 16-logical / 8-physical machine, going past 8 plateaus quickly:
+hyperthreading helps little on tight integer loops like SHA-256, and
+pickling overhead grows with worker count.
 
-> Take these from the GUI for the submission:
-> - "Run Both & Compare" filled-in results table.
-> - "Show Chart" matplotlib comparison.
+### Match position bias
+The target is planted in the second half of the list so neither mode
+"wins by luck." Sequential walks in order and would short-circuit early
+if it were near the front. Parallel splits the list into many sub-chunks,
+so the match latency depends on which sub-chunk lands on which worker
+and when.
 
 ## 6. Conclusion
 
-- Parallel beats Sequential by **~2.5x** on 8 workers for a 1 M wordlist.
-- Patterns reused directly from the lectures: `multiprocessing`, `Value`,
-  `Queue`, Poison Pill, chunking.
+- Parallel beats Sequential by **~2.7x** on 8 workers for a 1 M wordlist.
+- Switching from `Process(target=worker)` per chunk to a persistent
+  `Pool` cut overhead enough that parallel wins even on smaller
+  (~100 k word) lists where the per-process spawn cost previously
+  dominated.
 - The remaining gap from ideal speedup is explained by Amdahl's Law:
-  disk I/O and process-spawn overhead are not parallelizable.
+  disk I/O, pool startup, and IPC are not parallelizable.

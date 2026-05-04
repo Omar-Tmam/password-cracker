@@ -1,14 +1,10 @@
 """
 Parallel Cracker — multiprocessing.Pool with imap_unordered.
 
-EN: Splits the wordlist into many small sub-chunks and feeds them to a
-    persistent Pool. Workers are reused across sub-chunks (no respawn cost),
-    results stream back as they complete, and we abort by terminating the
-    pool the moment any worker reports a match.
-
-Patterns:
-  - Pool + imap_unordered = streaming static chunking with worker reuse
-  - Early-exit via pool.terminate() (no shared flag needed)
+Splits the wordlist into many small sub-chunks and feeds them to a persistent
+Pool. Workers are reused (no respawn cost), results stream back as they
+complete, and we abort by terminating the pool the moment any worker reports
+a match.
 """
 from __future__ import annotations
 
@@ -19,30 +15,27 @@ from .hasher import hash_word, normalize_hash
 from .utils import CrackResult, Timer, load_wordlist
 
 
-# Words per sub-chunk. Smaller = faster early-exit + smoother progress;
-# larger = lower IPC overhead per item.
 SUBCHUNK_SIZE = 2000
 
 
-def _hash_subchunk(args: Tuple[List[str], str, str]) -> Tuple[int, Optional[str], Optional[str]]:
+def _hash_subchunk(args: Tuple[List[str], str]) -> Tuple[int, Optional[str], Optional[str]]:
     """Hash one sub-chunk. Returns (count_processed, found_word_or_None, last_word)."""
-    words, target, algorithm = args
+    words, target = args
     last = None
     for i, w in enumerate(words):
-        if hash_word(w, algorithm) == target:
+        if hash_word(w) == target:
             return (i + 1, w, w)
         last = w
     return (len(words), None, last)
 
 
-def _iter_subchunks(words: List[str], target: str, algorithm: str):
+def _iter_subchunks(words: List[str], target: str):
     for start in range(0, len(words), SUBCHUNK_SIZE):
-        yield (words[start:start + SUBCHUNK_SIZE], target, algorithm)
+        yield (words[start:start + SUBCHUNK_SIZE], target)
 
 
 def crack_parallel(wordlist_path: str,
                    target_hash: str,
-                   algorithm: str = "sha256",
                    num_workers: Optional[int] = None,
                    progress_callback=None) -> CrackResult:
     target = normalize_hash(target_hash)
@@ -57,7 +50,7 @@ def crack_parallel(wordlist_path: str,
     with Timer() as t:
         pool = Pool(processes=n)
         try:
-            tasks = _iter_subchunks(words, target, algorithm)
+            tasks = _iter_subchunks(words, target)
             for processed, hit, last in pool.imap_unordered(_hash_subchunk, tasks):
                 checked += processed
                 if progress_callback:
@@ -94,10 +87,9 @@ def crack_parallel(wordlist_path: str,
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 3:
-        print("usage: python -m src.parallel_cracker <wordlist> <target_hash> [algo] [n_workers]")
+        print("usage: python -m src.parallel_cracker <wordlist> <target_hash> [n_workers]")
         sys.exit(1)
-    algo = sys.argv[3] if len(sys.argv) > 3 else "sha256"
-    n = int(sys.argv[4]) if len(sys.argv) > 4 else None
-    r = crack_parallel(sys.argv[1], sys.argv[2], algo, n)
+    n = int(sys.argv[3]) if len(sys.argv) > 3 else None
+    r = crack_parallel(sys.argv[1], sys.argv[2], n)
     print(f"Found: {r.found}  Password: {r.password}")
     print(f"Time: {r.time_taken:.3f}s   Words: {r.words_checked:,}   Workers: {r.workers}   Rate: {r.words_per_second:,.0f}/s")

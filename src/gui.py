@@ -408,16 +408,15 @@ class CrackerGUI:
         self._log(f"[{mode}] starting...")
         wl = self.wordlist_var.get()
         target = self.hash_var.get().strip()
-        algo = "sha256"
 
         def cb(checked, total, word):
             self._update_progress(mode, checked, total, word)
 
         try:
             if mode == "Sequential":
-                res = crack_sequential(wl, target, algo, progress_callback=cb)
+                res = crack_sequential(wl, target, progress_callback=cb)
             else:
-                res = crack_parallel(wl, target, algo,
+                res = crack_parallel(wl, target,
                                      self.workers_var.get(), progress_callback=cb)
         except Exception as e:
             self._log(f"[{mode}] ERROR: {e}")
