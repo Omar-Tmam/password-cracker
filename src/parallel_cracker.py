@@ -1,62 +1,43 @@
 """
-Parallel Cracker.
+Parallel Cracker — multiprocessing.Pool with imap_unordered.
 
-EN: Splits the wordlist into chunks (one per worker) and runs them in parallel
-    using multiprocessing. Stops as soon as ANY worker finds the password.
+EN: Splits the wordlist into many small sub-chunks and feeds them to a
+    persistent Pool. Workers are reused across sub-chunks (no respawn cost),
+    results stream back as they complete, and we abort by terminating the
+    pool the moment any worker reports a match.
 
-Lecture patterns used (only what's needed for sequential-vs-parallel):
-  - Parallel-1 slide 5 : multiprocessing.Pool with cpu_count()
-  - Communication slide 9 : shared Value('b', False) + Lock as the "found" flag
-  - Communication slide 10: Queue for sending the result back to main
-  - Adv-Patterns slide 5 : Poison Pill (None) to terminate workers cleanly
-AR: تقسيم القائمة على عمال متوازيين مع إيقاف الكل لما واحد يلاقي الباسورد.
+Patterns:
+  - Pool + imap_unordered = streaming static chunking with worker reuse
+  - Early-exit via pool.terminate() (no shared flag needed)
 """
 from __future__ import annotations
 
-import time
-from multiprocessing import Process, Queue, Value, cpu_count
-from queue import Empty
-from typing import List, Optional
+from multiprocessing import Pool, cpu_count
+from typing import List, Optional, Tuple
 
 from .hasher import hash_word, normalize_hash
-from .utils import CrackResult, Timer, load_wordlist, chunkify
+from .utils import CrackResult, Timer, load_wordlist
 
 
-# How often each worker checks the shared "found" flag.
-# Smaller = faster early-exit; larger = less synchronization overhead.
-CHECK_EVERY = 1000
+# Words per sub-chunk. Smaller = faster early-exit + smoother progress;
+# larger = lower IPC overhead per item.
+SUBCHUNK_SIZE = 2000
 
 
-def _worker(chunk: List[str],
-            target: str,
-            algorithm: str,
-            found_flag,        # multiprocessing.Value('b', False)
-            words_counter,     # multiprocessing.Value('i', 0)
-            result_q: Queue,
-            sample_q: Optional[Queue] = None):
-    """One process. Hashes its chunk; aborts when found_flag is set."""
-    local_count = 0
-    try:
-        for i, word in enumerate(chunk):
-            # Periodic check on the shared flag = poison-pill trigger.
-            if i % CHECK_EVERY == 0 and found_flag.value:
-                return
-            local_count += 1
-            if hash_word(word, algorithm) == target:
-                with found_flag.get_lock():
-                    found_flag.value = True
-                result_q.put(word)        # send result back via Queue (Communication lec 10)
-                return
-            if sample_q is not None and i % CHECK_EVERY == 0:
-                try:
-                    sample_q.put_nowait(word)
-                except Exception:
-                    pass
-    finally:
-        # Add this worker's local count to the shared total.
-        # Communication slide 9 pattern: Value + its built-in lock.
-        with words_counter.get_lock():
-            words_counter.value += local_count
+def _hash_subchunk(args: Tuple[List[str], str, str]) -> Tuple[int, Optional[str], Optional[str]]:
+    """Hash one sub-chunk. Returns (count_processed, found_word_or_None, last_word)."""
+    words, target, algorithm = args
+    last = None
+    for i, w in enumerate(words):
+        if hash_word(w, algorithm) == target:
+            return (i + 1, w, w)
+        last = w
+    return (len(words), None, last)
+
+
+def _iter_subchunks(words: List[str], target: str, algorithm: str):
+    for start in range(0, len(words), SUBCHUNK_SIZE):
+        yield (words[start:start + SUBCHUNK_SIZE], target, algorithm)
 
 
 def crack_parallel(wordlist_path: str,
@@ -68,46 +49,32 @@ def crack_parallel(wordlist_path: str,
     words = load_wordlist(wordlist_path)
     total = len(words)
     n = num_workers or cpu_count()
-    chunks = chunkify(words, n)
-    n = len(chunks)
-    log = [f"[Parallel] {total:,} words -> {n} workers"]
-
-    # Shared state (Communication lec 9): Value flag + Queue for result.
-    found_flag = Value("b", False)
-    words_counter = Value("i", 0)
-    result_q: Queue = Queue()
-    sample_q: Queue = Queue(maxsize=64) if progress_callback else None
-
-    processes = []
-    with Timer() as t:
-        for chunk in chunks:
-            p = Process(target=_worker,
-                        args=(chunk, target, algorithm,
-                              found_flag, words_counter, result_q, sample_q))
-            p.start()
-            processes.append(p)
-        # Poll instead of blocking-join so we can report progress.
-        last_word = None
-        while any(p.is_alive() for p in processes):
-            if progress_callback:
-                if sample_q is not None:
-                    try:
-                        while True:
-                            last_word = sample_q.get_nowait()
-                    except Empty:
-                        pass
-                progress_callback(words_counter.value, total, last_word)
-            time.sleep(0.05)
-        for p in processes:
-            p.join()
+    log = [f"[Parallel] {total:,} words -> Pool({n}), subchunk={SUBCHUNK_SIZE}"]
 
     found_password: Optional[str] = None
-    while not result_q.empty():
-        found_password = result_q.get()
+    checked = 0
 
-    # Real number of words workers actually hashed (less than total if Poison
-    # Pill triggered early termination).
-    checked = words_counter.value
+    with Timer() as t:
+        pool = Pool(processes=n)
+        try:
+            tasks = _iter_subchunks(words, target, algorithm)
+            for processed, hit, last in pool.imap_unordered(_hash_subchunk, tasks):
+                checked += processed
+                if progress_callback:
+                    progress_callback(checked, total, hit or last)
+                if hit is not None:
+                    found_password = hit
+                    pool.terminate()
+                    break
+            else:
+                pool.close()
+            pool.join()
+        finally:
+            try:
+                pool.close()
+            except Exception:
+                pass
+
     if found_password:
         log.append(f"[Parallel] MATCH: {found_password!r}")
     else:

@@ -425,6 +425,9 @@ class CrackerGUI:
             self._finish_progress(mode)
             return
         self._finish_progress(mode)
+        if res.found and res.password:
+            total = res.words_checked
+            self._update_progress(mode, total, total, res.password)
         self.results[mode] = res
         for line in res.log:
             self._log(line)
