@@ -14,12 +14,7 @@ import random
 import string
 import sys
 
-COMMON_PASSWORDS = [
-    "password", "123456", "qwerty", "letmein", "admin", "welcome",
-    "monkey", "dragon", "iloveyou", "trustno1", "master", "shadow",
-    "football", "baseball", "superman", "batman", "starwars",
-    "abc123", "password1", "passw0rd",
-]
+
 
 
 def random_word(min_len=4, max_len=12) -> str:
@@ -38,7 +33,7 @@ def main():
     target_path = os.path.join(data_dir, "sample_target_hash.txt")
 
     print(f"Generating {size:,} words -> {wordlist_path}")
-    words = list(COMMON_PASSWORDS) + [random_word() for _ in range(size - len(COMMON_PASSWORDS))]
+    words =  [random_word() for _ in range(size)]
     random.shuffle(words)
 
     target_idx = random.randint(size // 2, size - 1)

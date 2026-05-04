@@ -1,4 +1,4 @@
-"""SHA-256 hashing used by all cracker variants."""
+
 import hashlib
 
 
