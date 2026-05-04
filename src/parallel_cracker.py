@@ -13,7 +13,9 @@ AR: تقسيم القائمة على عمال متوازيين مع إيقاف �
 """
 from __future__ import annotations
 
+import time
 from multiprocessing import Process, Queue, Value, cpu_count
+from queue import Empty
 from typing import List, Optional
 
 from .hasher import hash_word, normalize_hash
@@ -30,7 +32,8 @@ def _worker(chunk: List[str],
             algorithm: str,
             found_flag,        # multiprocessing.Value('b', False)
             words_counter,     # multiprocessing.Value('i', 0)
-            result_q: Queue):
+            result_q: Queue,
+            sample_q: Optional[Queue] = None):
     """One process. Hashes its chunk; aborts when found_flag is set."""
     local_count = 0
     try:
@@ -44,6 +47,11 @@ def _worker(chunk: List[str],
                     found_flag.value = True
                 result_q.put(word)        # send result back via Queue (Communication lec 10)
                 return
+            if sample_q is not None and i % CHECK_EVERY == 0:
+                try:
+                    sample_q.put_nowait(word)
+                except Exception:
+                    pass
     finally:
         # Add this worker's local count to the shared total.
         # Communication slide 9 pattern: Value + its built-in lock.
@@ -54,27 +62,42 @@ def _worker(chunk: List[str],
 def crack_parallel(wordlist_path: str,
                    target_hash: str,
                    algorithm: str = "sha256",
-                   num_workers: Optional[int] = None) -> CrackResult:
+                   num_workers: Optional[int] = None,
+                   progress_callback=None) -> CrackResult:
     target = normalize_hash(target_hash)
     words = load_wordlist(wordlist_path)
+    total = len(words)
     n = num_workers or cpu_count()
     chunks = chunkify(words, n)
     n = len(chunks)
-    log = [f"[Parallel] {len(words):,} words -> {n} workers"]
+    log = [f"[Parallel] {total:,} words -> {n} workers"]
 
     # Shared state (Communication lec 9): Value flag + Queue for result.
     found_flag = Value("b", False)
-    words_counter = Value("i", 0)        # shared int: total words actually hashed
+    words_counter = Value("i", 0)
     result_q: Queue = Queue()
+    sample_q: Queue = Queue(maxsize=64) if progress_callback else None
 
     processes = []
     with Timer() as t:
         for chunk in chunks:
             p = Process(target=_worker,
                         args=(chunk, target, algorithm,
-                              found_flag, words_counter, result_q))
+                              found_flag, words_counter, result_q, sample_q))
             p.start()
             processes.append(p)
+        # Poll instead of blocking-join so we can report progress.
+        last_word = None
+        while any(p.is_alive() for p in processes):
+            if progress_callback:
+                if sample_q is not None:
+                    try:
+                        while True:
+                            last_word = sample_q.get_nowait()
+                    except Empty:
+                        pass
+                progress_callback(words_counter.value, total, last_word)
+            time.sleep(0.05)
         for p in processes:
             p.join()
 

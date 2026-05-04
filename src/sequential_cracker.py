@@ -14,13 +14,16 @@ from .utils import CrackResult, Timer, load_wordlist
 
 def crack_sequential(wordlist_path: str,
                      target_hash: str,
-                     algorithm: str = "sha256") -> CrackResult:
+                     algorithm: str = "sha256",
+                     progress_callback=None) -> CrackResult:
     target = normalize_hash(target_hash)
     words = load_wordlist(wordlist_path)
-    log = [f"[Sequential] loaded {len(words):,} words from {wordlist_path}"]
+    total = len(words)
+    log = [f"[Sequential] loaded {total:,} words from {wordlist_path}"]
 
     found_password = None
     checked = 0
+    REPORT_EVERY = max(50, total // 500)  # ~500 updates over the whole run
 
     with Timer() as t:
         for word in words:
@@ -28,7 +31,11 @@ def crack_sequential(wordlist_path: str,
             if hash_word(word, algorithm) == target:
                 found_password = word
                 log.append(f"[Sequential] MATCH at word #{checked}: {word!r}")
+                if progress_callback:
+                    progress_callback(checked, total, word)
                 break
+            if progress_callback and checked % REPORT_EVERY == 0:
+                progress_callback(checked, total, word)
 
     if found_password is None:
         log.append("[Sequential] password not in wordlist")
