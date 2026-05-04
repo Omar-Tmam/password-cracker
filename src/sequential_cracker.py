@@ -45,10 +45,3 @@ def crack_sequential(wordlist_path: str,
     )
 
 
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 3:
-        print("usage: python -m src.sequential_cracker <wordlist> <target_hash>")
-        sys.exit(1)
-    r = crack_sequential(sys.argv[1], sys.argv[2])
-    

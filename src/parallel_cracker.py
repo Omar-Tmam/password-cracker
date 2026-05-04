@@ -83,13 +83,3 @@ def crack_parallel(wordlist_path: str,
         log=log,
     )
 
-
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 3:
-        print("usage: python -m src.parallel_cracker <wordlist> <target_hash> [n_workers]")
-        sys.exit(1)
-    n = int(sys.argv[3]) if len(sys.argv) > 3 else None
-    r = crack_parallel(sys.argv[1], sys.argv[2], n)
-    print(f"Found: {r.found}  Password: {r.password}")
-    print(f"Time: {r.time_taken:.3f}s   Words: {r.words_checked:,}   Workers: {r.workers}   Rate: {r.words_per_second:,.0f}/s")
