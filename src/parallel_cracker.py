@@ -17,11 +17,12 @@ def _hash_subchunk(args: Tuple[List[str], str]) -> Tuple[int, Optional[str], Opt
     last = None
     for i, w in enumerate(words):
         if hash_word(w) == target:
+            # (num of words checked , which word match , last word hit )
             return (i + 1, w, w)
         last = w
     return (len(words), None, last)
 
-
+# convert long list to sub small lists(yields lists)
 def _iter_subchunks(words: List[str], target: str):
     for start in range(0, len(words), SUBCHUNK_SIZE):
         yield (words[start:start + SUBCHUNK_SIZE], target)
@@ -39,7 +40,7 @@ def crack_parallel(wordlist_path: str,
 
     found_password: Optional[str] = None
     checked = 0
-
+# run worker - Distributes the work - Receives results -  stops immediately if find.
     with Timer() as t:
         pool = Pool(processes=n)
         try:
@@ -55,6 +56,7 @@ def crack_parallel(wordlist_path: str,
                     pool.terminate()
                     break
             else:
+                # password not found
                 pool.close()
             pool.join()
         finally:
