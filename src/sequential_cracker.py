@@ -51,5 +51,4 @@ if __name__ == "__main__":
         print("usage: python -m src.sequential_cracker <wordlist> <target_hash>")
         sys.exit(1)
     r = crack_sequential(sys.argv[1], sys.argv[2])
-    print(f"Found: {r.found}  Password: {r.password}")
-    print(f"Time: {r.time_taken:.3f}s   Words: {r.words_checked:,}   Rate: {r.words_per_second:,.0f}/s")
+    

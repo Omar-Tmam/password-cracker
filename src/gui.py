@@ -6,9 +6,6 @@ from __future__ import annotations
 import os
 import sys
 import threading
-import hashlib
-import random
-import string
 from typing import Dict
 from tkinter import filedialog, messagebox
 
@@ -23,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.sequential_cracker import crack_sequential
 from src.parallel_cracker import crack_parallel
-from src.utils import CrackResult
+from src.utils import CrackResult, generate_test_data
 
 
 ctk.set_appearance_mode("dark")
@@ -294,42 +291,17 @@ class CrackerGUI:
         threading.Thread(target=self._generate_thread, args=(size,), daemon=True).start()
 
     def _generate_thread(self, size: int):
-        common = ["password", "123456", "qwerty", "letmein", "admin", "welcome",
-                  "monkey", "dragon", "iloveyou", "trustno1", "master", "shadow",
-                  "football", "baseball", "superman", "batman", "starwars",
-                  "abc123", "password1", "passw0rd"]
-        chars = string.ascii_lowercase + string.digits
+        try:
+            wordlist_path, digest, _, log = generate_test_data(size)
+            self.root.after(0, lambda: (
+                self.wordlist_var.set(wordlist_path),
+                self.hash_var.set(digest),
+            ))
+            for line in log:
+                self._log(line)
+        except Exception as e:
+            self._log(f"[Generate] ERROR: {e}")
 
-        self._log(f"[Generate] creating {size:,} words...")
-        words = list(common) + [
-            "".join(random.choices(chars, k=random.randint(4, 12)))
-            for _ in range(max(0, size - len(common)))
-        ]
-        random.shuffle(words)
-
-        target_idx = random.randint(size // 2, size - 1)
-        target_password = words[target_idx]
-
-        here = os.path.dirname(os.path.abspath(__file__))
-        data_dir = os.path.join(os.path.dirname(here), "data")
-        os.makedirs(data_dir, exist_ok=True)
-        wordlist_path = os.path.join(data_dir, "wordlist.txt")
-        target_path = os.path.join(data_dir, "sample_target_hash.txt")
-
-        with open(wordlist_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(words))
-
-        digest = hashlib.sha256(target_password.encode("utf-8")).hexdigest()
-        with open(target_path, "w", encoding="utf-8") as f:
-            f.write(f"sha256:{digest}:{target_password}\n")
-
-        self.root.after(0, lambda: (
-            self.wordlist_var.set(wordlist_path),
-            self.hash_var.set(digest),
-        ))
-        self._log(f"[Generate] wrote {wordlist_path}")
-        self._log(f"[Generate] target plaintext: {target_password!r} (line ~{target_idx + 1:,})")
-        self._log(f"[Generate] sha256: {digest}")
 
     def load_sample(self):
         here = os.path.dirname(os.path.abspath(__file__))
