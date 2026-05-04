@@ -1,11 +1,4 @@
-"""
-Parallel Cracker — multiprocessing.Pool with imap_unordered.
 
-Splits the wordlist into many small sub-chunks and feeds them to a persistent
-Pool. Workers are reused (no respawn cost), results stream back as they
-complete, and we abort by terminating the pool the moment any worker reports
-a match.
-"""
 from __future__ import annotations
 
 from multiprocessing import Pool, cpu_count
@@ -19,7 +12,7 @@ SUBCHUNK_SIZE = 2000
 
 
 def _hash_subchunk(args: Tuple[List[str], str]) -> Tuple[int, Optional[str], Optional[str]]:
-    """Hash one sub-chunk. Returns (count_processed, found_word_or_None, last_word)."""
+   
     words, target = args
     last = None
     for i, w in enumerate(words):
@@ -51,8 +44,10 @@ def crack_parallel(wordlist_path: str,
         pool = Pool(processes=n)
         try:
             tasks = _iter_subchunks(words, target)
+            #task parallelism
             for processed, hit, last in pool.imap_unordered(_hash_subchunk, tasks):
                 checked += processed
+                #early stop if found
                 if progress_callback:
                     progress_callback(checked, total, hit or last)
                 if hit is not None:
